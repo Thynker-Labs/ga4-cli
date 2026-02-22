@@ -1,0 +1,27 @@
+{
+  "name": "ga4-cli",
+  "version": "1.0.0",
+  "description": "GA4 Analytics CLI with TUI - Realtime and Reports",
+  "main": "index.js",
+  "bin": {
+    "ga4": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "ga4",
+    "google-analytics",
+    "cli",
+    "tui",
+    "analytics"
+  ],
+  "author": "Sid Wahi",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "blessed": "^0.4.5",
+    "blessed-contrib": "^4.11.0",
+    "googleapis": "^140.0.0"
+  }
+}
