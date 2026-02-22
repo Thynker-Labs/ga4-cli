@@ -1,6 +1,6 @@
 # GA4 CLI
 
-Google Analytics 4 CLI with TUI - Realtime monitoring and Reports.
+Google Analytics 4 CLI with TUI + command-line modes.
 
 ## Installation
 
@@ -40,54 +40,54 @@ ga4 init /path/to/your-service-account-key.json
 
 ## Usage
 
+### TUI mode (default)
+
 ```bash
-# Start the TUI
 ga4
+# or
+ga4 tui
 ```
 
-### Controls
+### CLI mode
 
-- **Arrow keys** - Navigate menus
-- **Enter** - Select
-- **Escape** - Go back / Exit submenu
-- **q** or **Ctrl+C** - Quit
+```bash
+# realtime summary
+ga4 realtime --property 123456789
 
-### Features
+# report summary (default range: last7)
+ga4 report --property 123456789 --range last30
 
-#### Realtime Mode
-- Active users
-- Pageviews per minute
-- Events per minute
-- Active pages (top 10)
-- Top events (top 10)
-- Auto-refreshes every 5 seconds
+# JSON output
+ga4 realtime --property 123456789 --json
+ga4 report --property 123456789 --range today --json
+```
 
-#### Reports Mode
-Date range options:
-- Today
-- Yesterday
-- Last 7 days
-- Last 30 days
-- Last 90 days
-- This month
-- Last month
+Valid `--range` values:
+- `today`
+- `yesterday`
+- `last7`
+- `last30`
+- `last90`
 
-Metrics:
-- Sessions, Users, New Users
-- Pageviews
-- Average Session Duration
-- Bounce Rate
-- Top Pages
-- Top Events
-- Traffic Sources
+## Error logging
+
+All runtime errors are appended to:
+
+`~/.ga4-cli/errors.log`
+
+The CLI also prints the log path when an error occurs.
 
 ## Configuration
 
 Config is stored at: `~/.ga4-cli/config.json`
 
-To reinitialize with new credentials:
-```bash
-ga4 init /path/to/new-key.json
+Optional: set a default property ID in config to avoid passing `--property` every time.
+
+```json
+{
+  "credentials": { "...": "..." },
+  "propertyId": "123456789"
+}
 ```
 
 ## License
