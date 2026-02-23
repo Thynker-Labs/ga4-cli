@@ -92,30 +92,52 @@ class GA4Service {
     this.requirePropertyId();
     const res = await this.client.properties.runRealtimeReport({
       property: `properties/${this.propertyId}`,
-      metrics: [{ name: 'activeUsers' }, { name: 'screenPageViewsPerMinute' }, { name: 'eventCountPerMinute' }],
+      requestBody: {
+        metrics: [{ name: 'activeUsers' }, { name: 'screenPageViews' }, { name: 'eventCount' }],
+      },
     });
 
     const row = res.data?.rows?.[0];
     return {
       activeUsers: row?.metricValues?.[0]?.value || '0',
-      pageviewsPerMinute: row?.metricValues?.[1]?.value || '0',
-      eventsPerMinute: row?.metricValues?.[2]?.value || '0',
+      screenPageViews: row?.metricValues?.[1]?.value || '0',
+      eventCount: row?.metricValues?.[2]?.value || '0',
     };
+  }
+
+  async getRealtimeTopPages(limit = 20) {
+    this.requirePropertyId();
+    const res = await this.client.properties.runRealtimeReport({
+      property: `properties/${this.propertyId}`,
+      requestBody: {
+        dimensions: [{ name: 'unifiedScreenName' }],
+        metrics: [{ name: 'screenPageViews' }],
+        orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
+        limit: String(limit),
+      },
+    });
+    const rows = res.data?.rows || [];
+    return rows.map((r) => ({
+      page: r.dimensionValues?.[0]?.value || '(not set)',
+      views: r.metricValues?.[0]?.value || '0',
+    }));
   }
 
   async getReportSummary(startDate, endDate) {
     this.requirePropertyId();
     const res = await this.client.properties.runReport({
       property: `properties/${this.propertyId}`,
-      dateRanges: [{ startDate, endDate }],
-      metrics: [
-        { name: 'sessions' },
-        { name: 'totalUsers' },
-        { name: 'newUsers' },
-        { name: 'screenPageViews' },
-        { name: 'averageSessionDuration' },
-        { name: 'bounceRate' },
-      ],
+      requestBody: {
+        dateRanges: [{ startDate, endDate }],
+        metrics: [
+          { name: 'sessions' },
+          { name: 'totalUsers' },
+          { name: 'newUsers' },
+          { name: 'screenPageViews' },
+          { name: 'averageSessionDuration' },
+          { name: 'bounceRate' },
+        ],
+      },
     });
 
     const row = res.data?.rows?.[0];
@@ -127,6 +149,142 @@ class GA4Service {
       pageviews: m[3]?.value || '0',
       averageSessionDuration: m[4]?.value || '0',
       bounceRate: m[5]?.value || '0',
+    };
+  }
+
+  getPathVariants(path) {
+    const p = String(path || '').trim();
+    if (!p) return [];
+    const normalized = p.startsWith('/') ? p : `/${p}`;
+    if (normalized === '/') return ['/'];
+    const withTrailing = normalized.endsWith('/') ? normalized : `${normalized}/`;
+    const withoutTrailing = normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+    return [...new Set([withTrailing, withoutTrailing])];
+  }
+
+  async getPathReport(pathInput, startDate, endDate) {
+    this.requirePropertyId();
+    const pathVariants = this.getPathVariants(pathInput);
+    if (pathVariants.length === 0) {
+      throw new Error('Path cannot be empty');
+    }
+
+    const normalized = pathInput.trim().startsWith('/') ? pathInput.trim() : `/${pathInput.trim()}`;
+    const basePath = normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+
+    const buildRequest = (dimensionFilter) => ({
+      property: `properties/${this.propertyId}`,
+      requestBody: {
+        dateRanges: [{ startDate, endDate }],
+        dimensions: [{ name: 'pagePath' }],
+        metrics: [
+          { name: 'sessions' },
+          { name: 'totalUsers' },
+          { name: 'newUsers' },
+          { name: 'screenPageViews' },
+          { name: 'eventCount' },
+          { name: 'averageSessionDuration' },
+          { name: 'bounceRate' },
+          { name: 'engagementRate' },
+        ],
+        dimensionFilter,
+      },
+    });
+
+    let res = await this.client.properties.runReport(
+      buildRequest({
+        filter: {
+          fieldName: 'pagePath',
+          inListFilter: {
+            values: pathVariants,
+            caseSensitive: false,
+          },
+        },
+      }),
+    );
+
+    const getTotalViews = (r) => parseInt(r?.data?.totals?.[0]?.metricValues?.[3]?.value || '0', 10);
+    const getRows = (r) => r?.data?.rows || [];
+
+    if (getTotalViews(res) === 0 && getRows(res).length === 0) {
+      res = await this.client.properties.runReport(
+        buildRequest({
+          filter: {
+            fieldName: 'pagePath',
+            stringFilter: {
+              matchType: 'BEGINS_WITH',
+              value: basePath,
+              caseSensitive: false,
+            },
+          },
+        }),
+      );
+    }
+
+    const rows = getRows(res);
+    const totals = res.data?.totals?.[0]?.metricValues;
+
+    const sumMetric = (metricIndex) =>
+      String(
+        rows.reduce((sum, row) => sum + parseFloat(row.metricValues?.[metricIndex]?.value || '0'), 0),
+      );
+
+    const weightedAvg = (metricIndex, weightIndex = 0) => {
+      if (rows.length === 0) return '0';
+      if (rows.length === 1) return rows[0].metricValues?.[metricIndex]?.value || '0';
+      let sumWx = 0;
+      let sumW = 0;
+      rows.forEach((row) => {
+        const w = parseFloat(row.metricValues?.[weightIndex]?.value || '0');
+        sumWx += parseFloat(row.metricValues?.[metricIndex]?.value || '0') * w;
+        sumW += w;
+      });
+      return sumW > 0 ? String(Math.round((sumWx / sumW) * 100) / 100) : '0';
+    };
+
+    const m = totals || [];
+    const formatRate = (v) => {
+      const n = parseFloat(v);
+      if (n > 0 && n < 1) return String(Math.round(n * 1000) / 10);
+      return v;
+    };
+    const formatDuration = (v) => {
+      const n = parseFloat(v);
+      return isNaN(n) ? v : String(Math.round(n * 10) / 10);
+    };
+    const metric = (i) => {
+      let v;
+      if (m[i]?.value) v = m[i].value;
+      else if (rows.length === 0) v = '0';
+      else if ([0, 1, 2, 3, 4].includes(i)) v = sumMetric(i);
+      else v = weightedAvg(i, 0);
+      if (i === 5) v = formatDuration(v);
+      else if (i === 6 || i === 7) v = formatRate(v);
+      return v;
+    };
+
+    return {
+      path: pathInput,
+      pathVariants,
+      sessions: metric(0),
+      totalUsers: metric(1),
+      newUsers: metric(2),
+      pageviews: metric(3),
+      eventCount: metric(4),
+      averageSessionDuration: metric(5),
+      bounceRate: metric(6),
+      engagementRate: metric(7),
+      byPath: rows.map((r) => ({
+        pagePath: r.dimensionValues?.[0]?.value || '(not set)',
+        sessions: r.metricValues?.[0]?.value || '0',
+        totalUsers: r.metricValues?.[1]?.value || '0',
+        newUsers: r.metricValues?.[2]?.value || '0',
+        pageviews: r.metricValues?.[3]?.value || '0',
+        eventCount: r.metricValues?.[4]?.value || '0',
+        averageSessionDuration: r.metricValues?.[5]?.value || '0',
+        bounceRate: r.metricValues?.[6]?.value || '0',
+        engagementRate: r.metricValues?.[7]?.value || '0',
+      })),
     };
   }
 }
@@ -168,6 +326,7 @@ class GA4TUI {
 
     const options = [
       { label: 'Realtime summary', action: () => this.showRealtime() },
+      { label: 'Path report', action: () => this.showPathInput() },
       { label: 'Quit', action: () => process.exit(0) },
     ];
 
@@ -187,35 +346,199 @@ class GA4TUI {
     this.screen.render();
   }
 
-  async showRealtime() {
+  async showPathInput() {
+    const blessed = this.blessed;
+    this.contentBox.children = [];
+
+    const form = blessed.form({
+      parent: this.contentBox,
+      top: 'center',
+      left: 'center',
+      width: 50,
+      keys: true,
+    });
+
+    blessed.text({
+      parent: form,
+      top: 0,
+      left: 0,
+      content: 'Enter path (e.g. /about or /blog/post):',
+    });
+
+    const input = blessed.textbox({
+      parent: form,
+      top: 2,
+      left: 0,
+      width: 48,
+      height: 3,
+      border: { type: 'line' },
+      inputOnFocus: true,
+      name: 'path',
+    });
+
+    blessed.text({
+      parent: form,
+      top: 6,
+      left: 0,
+      content: 'Press Enter to fetch  |  Esc to go back',
+      style: { fg: 'gray' },
+    });
+
+    input.focus();
+    input.key('escape', () => this.showMenu());
+
+    form.on('submit', async (data) => {
+      const path = (data.path || '').trim();
+      if (path) await this.showPathReport(path);
+    });
+
+    input.key('enter', () => form.submit());
+    this.screen.render();
+  }
+
+  async showPathReport(pathInput) {
     const blessed = this.blessed;
     this.contentBox.children = [];
 
     const box = blessed.box({
       parent: this.contentBox,
-      top: 'center',
-      left: 'center',
-      width: '70%',
-      height: 10,
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: '100%',
       border: { type: 'line' },
+      style: { border: { fg: 'cyan' } },
+      tags: true,
+      content: '{cyan-fg}Loading path report...{/}',
+      scrollable: true,
+      keys: true,
+    });
+
+    const goBack = () => {
+      this.showPathInput();
+    };
+    box.key(['escape', 'b'], goBack);
+
+    try {
+      const { startDate, endDate } = getDateRange('last7');
+      const report = await this.service.getPathReport(pathInput, startDate, endDate);
+
+      const lines = [
+        `{cyan-fg}Path Report{/}  |  {green-fg}${report.path}{/}`,
+        `Includes variants: {yellow-fg}${report.pathVariants.join(', ')}{/}`,
+        `Range: ${startDate} to ${endDate}  |  Property: ${this.service.propertyId}`,
+        '',
+        '{cyan-fg}Metrics{/}',
+        `  Sessions:         {green-fg}${report.sessions}{/}`,
+        `  Total Users:      {green-fg}${report.totalUsers}{/}`,
+        `  New Users:        {green-fg}${report.newUsers}{/}`,
+        `  Pageviews:        {green-fg}${report.pageviews}{/}`,
+        `  Events:           {green-fg}${report.eventCount}{/}`,
+        `  Avg Session:      {green-fg}${report.averageSessionDuration}s{/}`,
+        `  Bounce Rate:      {green-fg}${report.bounceRate}%{/}`,
+        `  Engagement Rate:  {green-fg}${report.engagementRate}%{/}`,
+      ];
+
+      if (report.byPath?.length > 1) {
+        lines.push('', '{cyan-fg}By path variant:{/}');
+        report.byPath.forEach((p) => {
+          lines.push(`  {yellow-fg}${p.pagePath}{/}: ${p.pageviews} views, ${p.sessions} sessions`);
+        });
+      }
+
+      lines.push('', '{gray-fg}Press Esc or B to go back{/}');
+      box.setContent(lines.join('\n'));
+      box.setScrollPerc(0);
+    } catch (error) {
+      logError(error, 'tui:showPathReport');
+      box.setContent(`{red-fg}Error:{/} ${error.message}\n\n{gray-fg}Press Esc to go back{/}`);
+    }
+
+    this.screen.render();
+  }
+
+  async showRealtime() {
+    const blessed = this.blessed;
+    this.contentBox.children = [];
+
+    const summaryBox = blessed.box({
+      parent: this.contentBox,
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: 6,
+      border: { type: 'line' },
+      style: { border: { fg: 'cyan' } },
+      tags: true,
       content: 'Loading...',
     });
 
+    const pagesBox = blessed.box({
+      parent: this.contentBox,
+      top: 6,
+      left: 0,
+      width: '100%',
+      height: '100%-6',
+      border: { type: 'line' },
+      style: { border: { fg: 'green' } },
+      tags: true,
+      scrollable: true,
+      alwaysScroll: true,
+      keys: true,
+      content: 'Loading top pages...',
+    });
+
+    let countdown = 5;
+    let lastSummary = null;
+    let lastTopPages = null;
+
+    const formatSummaryLine = (s, secs) => {
+      if (!s) return '';
+      const cd = secs !== undefined ? `  |  {yellow-fg}Refreshing in {bold}${secs}{/bold}s{/}` : '';
+      return `{cyan-fg}Realtime{/} (property {green-fg}${this.service.propertyId}{/})  |  {cyan-fg}Active Users:{/} {green-fg}${s.activeUsers}{/}  |  {cyan-fg}Views:{/} {green-fg}${s.screenPageViews}{/}  |  {cyan-fg}Events:{/} {green-fg}${s.eventCount}{/}${cd}`;
+    };
+
     const refresh = async () => {
       try {
-        const summary = await this.service.getRealtimeSummary();
-        box.setContent(
-          `Realtime (property ${this.service.propertyId})\n\nActive Users: ${summary.activeUsers}\nPageviews/min: ${summary.pageviewsPerMinute}\nEvents/min: ${summary.eventsPerMinute}`,
+        const [summary, topPages] = await Promise.all([
+          this.service.getRealtimeSummary(),
+          this.service.getRealtimeTopPages(20),
+        ]);
+        lastSummary = summary;
+        lastTopPages = topPages;
+        countdown = 5;
+
+        summaryBox.setContent(formatSummaryLine(summary));
+        const maxLen = 60;
+        const truncate = (s) => (s.length > maxLen ? s.slice(0, maxLen - 3) + '...' : s);
+        const header = '\n{cyan-fg} #  Page{/}'.padEnd(maxLen + 22) + '{cyan-fg}Views{/}\n' + '─'.repeat(maxLen + 12);
+        const rows = topPages.map(
+          (p, i) => ` {green-fg}${String(i + 1).padStart(2)}{/}  ${truncate(p.page).padEnd(maxLen)}  {yellow-fg}${p.views}{/}`,
         );
+        pagesBox.setContent(header + '\n' + rows.join('\n'));
+        pagesBox.setScrollPerc(0);
       } catch (error) {
         logError(error, 'tui:showRealtime');
-        box.setContent(`Error: ${error.message}\nLogged to ${ERROR_LOG_FILE}`);
+        summaryBox.setContent(`{red-fg}Error:{/} ${error.message}`);
+        pagesBox.setContent(`Logged to ${ERROR_LOG_FILE}`);
       }
       this.screen.render();
     };
 
+    const tick = () => {
+      if (countdown > 0) {
+        if (lastSummary) {
+          summaryBox.setContent(formatSummaryLine(lastSummary, countdown));
+        }
+        countdown--;
+        this.screen.render();
+      } else {
+        refresh();
+      }
+    };
+
     await refresh();
-    this.realtimeInterval = setInterval(refresh, 5000);
+    this.realtimeInterval = setInterval(tick, 1000);
     this.screen.render();
   }
 
@@ -245,6 +568,10 @@ function getDateRange(range) {
       break;
     case 'last90':
       start.setDate(start.getDate() - 90);
+      break;
+    case 'all':
+    case 'alltime':
+      start.setFullYear(start.getFullYear() - 5);
       break;
     case 'last7':
     default:
@@ -279,14 +606,17 @@ function printUsage() {
   ga4 init <service-account-json>
   ga4 tui [--property <id>]
   ga4 realtime --property <id> [--json]
-  ga4 report --property <id> [--range today|yesterday|last7|last30|last90] [--json]
+  ga4 report --property <id> [--range today|yesterday|last7|last30|last90|all] [--json]
+  ga4 path <path> --property <id> [--range today|yesterday|last7|last30|last90|all] [--json]
 
 Notes:
+  - path: Queries both path and path/ (with and without trailing slash).
+  - all: Last 5 years (all time).
   - TUI is still available and remains the default mode.
   - Errors are logged to ${ERROR_LOG_FILE}`);
 }
 
-async function runCliCommand(service, command, options) {
+async function runCliCommand(service, command, options, positionals = []) {
   if (options.property) service.setPropertyId(options.property);
 
   switch (command) {
@@ -297,8 +627,8 @@ async function runCliCommand(service, command, options) {
       } else {
         console.log(`Property: ${service.propertyId}`);
         console.log(`Active Users: ${summary.activeUsers}`);
-        console.log(`Pageviews/min: ${summary.pageviewsPerMinute}`);
-        console.log(`Events/min: ${summary.eventsPerMinute}`);
+        console.log(`Views: ${summary.screenPageViews}`);
+        console.log(`Events: ${summary.eventCount}`);
       }
       return;
     }
@@ -314,6 +644,37 @@ async function runCliCommand(service, command, options) {
         console.log(`Users: ${summary.totalUsers}`);
         console.log(`New Users: ${summary.newUsers}`);
         console.log(`Pageviews: ${summary.pageviews}`);
+      }
+      return;
+    }
+    case 'path': {
+      const pathArg = options.path ?? positionals[1];
+      if (!pathArg) {
+        console.error('Usage: ga4 path <path> --property <id> [--range last7]');
+        process.exit(1);
+      }
+      const { startDate, endDate } = getDateRange(options.range);
+      const pathReport = await service.getPathReport(pathArg, startDate, endDate);
+      if (options.json) {
+        console.log(JSON.stringify({ startDate, endDate, ...pathReport }, null, 2));
+      } else {
+        console.log(`Property: ${service.propertyId}`);
+        console.log(`Path: ${pathReport.path} (includes: ${pathReport.pathVariants.join(', ')})`);
+        console.log(`Range: ${startDate} to ${endDate}`);
+        console.log(`Sessions: ${pathReport.sessions}`);
+        console.log(`Users: ${pathReport.totalUsers}`);
+        console.log(`New Users: ${pathReport.newUsers}`);
+        console.log(`Pageviews: ${pathReport.pageviews}`);
+        console.log(`Events: ${pathReport.eventCount}`);
+        console.log(`Avg Session: ${pathReport.averageSessionDuration}s`);
+        console.log(`Bounce Rate: ${pathReport.bounceRate}%`);
+        console.log(`Engagement Rate: ${pathReport.engagementRate}%`);
+        if (pathReport.byPath?.length > 1) {
+          console.log('\nBy path variant:');
+          pathReport.byPath.forEach((p) => {
+            console.log(`  ${p.pagePath}: ${p.pageviews} views, ${p.sessions} sessions`);
+          });
+        }
       }
       return;
     }
@@ -350,7 +711,7 @@ async function runCliCommand(service, command, options) {
       return;
     }
 
-    await runCliCommand(service, command, options);
+    await runCliCommand(service, command, options, positionals);
   } catch (error) {
     exitWithLoggedError(error, `main:${command}`);
   }
