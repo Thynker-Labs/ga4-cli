@@ -1,5 +1,5 @@
 {
-  "name": "ga4-cli",
+  "name": "@thynker-labs/ga4-cli",
   "version": "1.0.0",
   "description": "GA4 Analytics CLI with TUI - Realtime and Reports",
   "main": "index.js",
