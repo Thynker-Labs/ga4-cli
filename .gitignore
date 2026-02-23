@@ -3,3 +3,5 @@ node_modules/
 .DS_Store
 *.log
 .ga4-cli/
+creds.json
+package-lock.json

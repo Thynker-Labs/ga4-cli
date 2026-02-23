@@ -67,17 +67,23 @@ class GA4TUI {
   }
   
   async setupGA() {
-    const { BetaAnalyticsDataClient } = require('googleapis').analyticsadmin;
-    
+    const { BetaAnalyticsDataClient } = require('@google-analytics/data');
+    const { AnalyticsAdminServiceClient } = require('@google-analytics/admin');
+
     this.client = new BetaAnalyticsDataClient({
       credentials: this.config.credentials
     });
-    
-    // Get available properties
-    const [properties] = await this.client.listProperties({
+
+    const adminClient = new AnalyticsAdminServiceClient({
+      credentials: this.config.credentials
+    });
+
+    // Get available properties (Admin API)
+    const [listResponse] = await adminClient.listProperties({
       filter: 'propertyType:PROPERTY'
     });
-    
+    const properties = listResponse.properties || [];
+
     this.properties = properties.map(p => ({
       id: p.name.split('/')[1],
       name: p.displayName
@@ -649,6 +655,8 @@ Bounce Rate:  ${(parseFloat(bounceRate) * 100).toFixed(1)}%`
       this.showMenu();
     } catch (err) {
       console.error('Failed to initialize:', err.message);
+      //log error to file
+      fs.appendFileSync('error.log', `${new Date().toISOString()} - ${err.message}\n`);
       process.exit(1);
     }
   }
