@@ -1,6 +1,14 @@
 # GA4 CLI
 
-Google Analytics 4 CLI with TUI - Realtime monitoring and Reports.
+A terminal-based Google Analytics 4 client with both interactive TUI and headless CLI modes. Query realtime stats, historical reports, and per-path analytics without leaving the shell.
+
+## Features
+
+- **Realtime** – Active users, views, events (CLI or TUI with auto-refresh)
+- **Reports** – Sessions, users, pageviews, bounce rate, engagement across date ranges
+- **Path reports** – Full metrics for specific URL paths (handles trailing slash variants)
+- **TUI** – Interactive menu with realtime dashboard, top 20 pages, path lookup, countdown timer
+- **JSON output** – Machine-readable output for scripting and automation
 
 ## Installation
 
@@ -15,80 +23,112 @@ npm link
 
 ### 1. Enable Google Analytics Data API
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create a new project or select existing
-3. Search for and enable **Google Analytics Data API**
+1. Open [Google Cloud Console](https://console.cloud.google.com)
+2. Create or select a project
+3. Enable **Google Analytics Data API** (APIs & Services → Library)
 4. Go to **IAM & Admin** → **Service Accounts**
-5. Create a service account (or use existing)
-6. Click on the service account → **Keys** tab
-7. Add key → Create new key → **JSON**
-8. Download the JSON file
+5. Create a service account (or use an existing one)
+6. Add key → Create new key → **JSON**
+7. Download the JSON key file
 
-### 2. Add Service Account to GA4
+### 2. Grant access in GA4
 
 1. Go to [GA4 Admin](https://analytics.google.com)
 2. Select your property
-3. Go to **Property Access Management**
-4. Add user → Enter service account email (from JSON file)
+3. **Property Access Management** → Add user
+4. Enter the service account email from the JSON file
 5. Assign **Viewer** role
 
-### 3. Initialize CLI
+### 3. Initialize the CLI
 
 ```bash
-ga4 init /path/to/your-service-account-key.json
+ga4 init /path/to/service-account-key.json
 ```
 
 ## Usage
 
+### TUI mode (default)
+
 ```bash
-# Start the TUI
 ga4
+# or
+ga4 tui [--property <id>]
 ```
 
-### Controls
+Interactive menu:
 
-- **Arrow keys** - Navigate menus
-- **Enter** - Select
-- **Escape** - Go back / Exit submenu
-- **q** or **Ctrl+C** - Quit
+- **Realtime summary** – Refreshes every 5 seconds with countdown; shows active users, views, events, and top 20 pages
+- **Path report** – Enter a path to see metrics for that page
+- **Quit**
 
-### Features
+### CLI commands
 
-#### Realtime Mode
-- Active users
-- Pageviews per minute
-- Events per minute
-- Active pages (top 10)
-- Top events (top 10)
-- Auto-refreshes every 5 seconds
+```bash
+# Realtime summary
+ga4 realtime --property 268092156
 
-#### Reports Mode
-Date range options:
-- Today
-- Yesterday
-- Last 7 days
-- Last 30 days
-- Last 90 days
-- This month
-- Last month
+# Historical report (default: last 7 days)
+ga4 report --property 268092156 --range last30
 
-Metrics:
-- Sessions, Users, New Users
-- Pageviews
-- Average Session Duration
-- Bounce Rate
-- Top Pages
-- Top Events
-- Traffic Sources
+# Path-specific metrics (queries /path and /path/ variants)
+ga4 path /about --property 268092156 --range last90
+
+# All-time data (last 5 years)
+ga4 report --property 268092156 --range all
+
+# JSON output for scripting
+ga4 realtime --property 268092156 --json
+ga4 report --property 268092156 --range today --json
+ga4 path /article/slug --property 268092156 --json
+```
+
+### Date ranges
+
+| Value      | Description      |
+|-----------|------------------|
+| `today`   | Today only       |
+| `yesterday` | Yesterday only |
+| `last7`   | Last 7 days (default) |
+| `last30`  | Last 30 days     |
+| `last90`  | Last 90 days     |
+| `all`     | Last 5 years     |
+
+### Path reports
+
+The `path` command automatically:
+
+- Queries both `/path` and `/path/` (with and without trailing slash)
+- Falls back to a prefix match if exact match returns no data
+- Returns sessions, users, new users, pageviews, events, average session duration, bounce rate, engagement rate
+
+Example:
+
+```bash
+ga4 path /2026/my-article-slug --property 268092156 --range last90
+```
 
 ## Configuration
 
-Config is stored at: `~/.ga4-cli/config.json`
+Config file: `~/.ga4-cli/config.json` (Windows: `%USERPROFILE%\.ga4-cli\config.json`)
 
-To reinitialize with new credentials:
-```bash
-ga4 init /path/to/new-key.json
+Optional `propertyId` for a default property:
+
+```json
+{
+  "credentials": { "..." },
+  "propertyId": "268092156"
+}
 ```
+
+## Error logging
+
+Errors are appended to `~/.ga4-cli/errors.log`. The CLI prints the log path when an error occurs.
+
+## Requirements
+
+- Node.js 14+
+- GA4 property with Data API enabled
+- Service account with Viewer access to the property
 
 ## License
 
