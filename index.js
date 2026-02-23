@@ -609,10 +609,6 @@ function printUsage() {
   ga4 report --property <id> [--range today|yesterday|last7|last30|last90|all] [--json]
   ga4 path <path> --property <id> [--range today|yesterday|last7|last30|last90|all] [--json]
 
-Notes:
-  - path: Queries both path and path/ (with and without trailing slash).
-  - all: Last 5 years (all time).
-  - TUI is still available and remains the default mode.
   - Errors are logged to ${ERROR_LOG_FILE}`);
 }
 
