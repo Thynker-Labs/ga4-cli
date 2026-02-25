@@ -1,6 +1,6 @@
 {
   "name": "@thynker-labs/ga4-cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "GA4 Analytics CLI with TUI - Realtime and Reports",
   "main": "index.js",
   "bin": {
@@ -18,13 +18,15 @@
   ],
   "author": "Sid Wahi",
   "license": "MIT",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "type": "commonjs",
-"overrides": {
+  "overrides": {
     "rimraf": "^6.1.0"
   },
   "dependencies": {
-        "@google-analytics/admin": "^9.0.1",
+    "@google-analytics/admin": "^9.0.1",
     "@google-analytics/data": "^5.2.1",
     "blessed": "^0.1.81",
     "blessed-contrib": "^4.11.0",
