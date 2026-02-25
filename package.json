@@ -18,9 +18,13 @@
   ],
   "author": "Sid Wahi",
   "license": "MIT",
+  "engines": { "node": ">=20" },
   "type": "commonjs",
+"overrides": {
+    "rimraf": "^6.1.0"
+  },
   "dependencies": {
-    "@google-analytics/admin": "^9.0.1",
+        "@google-analytics/admin": "^9.0.1",
     "@google-analytics/data": "^5.2.1",
     "blessed": "^0.1.81",
     "blessed-contrib": "^4.11.0",
