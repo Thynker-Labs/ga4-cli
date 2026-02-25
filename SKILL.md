@@ -1,11 +1,11 @@
 ---
 name: ga4-cli
-description: Query Google Analytics 4 (GA4) from the terminal. Use when users need realtime analytics, historical reports, or per-path metrics. Supports TUI mode, CLI commands, path-specific reports with trailing-slash variants, and JSON output for automation. Requires a GA4 property ID and service account credentials.
+description: Query Google Analytics 4 (GA4) from the terminal. Use when users need realtime analytics, historical reports, top pages/screens, or per-path metrics. Supports TUI mode, CLI commands, custom date ranges, path-specific reports with trailing-slash variants, and JSON output for automation. Requires a GA4 property ID and service account credentials.
 license: MIT
-compatibility: Requires Node.js 14+, Google Analytics Data API enabled, GA4 property with service account access. Network access required for API calls.
+compatibility: Requires Node.js 20+, Google Analytics Data API enabled, GA4 property with service account access. Network access required for API calls.
 metadata:
   author: Sid Wahi
-  version: "1.0"
+  version: "1.1"
 ---
 
 # GA4 CLI Skill
@@ -28,17 +28,27 @@ Instructions for agents working with the GA4 CLI tool.
 | `ga4 tui [--property \<id\>]` | Interactive TUI (default mode) |
 | `ga4 realtime --property \<id\> [--json]` | Realtime active users, views, events |
 | `ga4 report --property \<id\> [--range ...] [--json]` | Historical report summary |
-| `ga4 path \<path\> --property \<id\> [--range ...] [--json]` | Metrics for a specific URL path |
+| `ga4 pages --property \<id\> [--range ...] [--start-date ... --end-date ...] [--limit 20] [--json]` | Top pages/screens with path, title, views, sessions, bounce, engagement time |
+| `ga4 path \<path\> --property \<id\> [--range ...] [--start-date ... --end-date ...] [--json]` | Metrics for a specific URL path |
 
 ### Date ranges
 
-`today`, `yesterday`, `last7`, `last30`, `last90`, `all` (last 5 years)
+`today`, `yesterday`, `last7`, `last30`, `last90`, `all` (last 5 years), `custom`
+
+- For custom ranges, pass both `--start-date YYYY-MM-DD` and `--end-date YYYY-MM-DD`
 
 ### Path command behavior
 
 - Queries both `path` and `path/` (with and without trailing slash)
 - Falls back to `BEGINS_WITH` when exact match returns no data
 - Returns sessions, users, pageviews, events, bounce rate, engagement rate
+
+### TUI behavior
+
+- Main menu: realtime summary, top pages/screens, path report, quit
+- Realtime: auto-refresh every 5s, `Esc`/`B` returns to menu, `R` refreshes immediately
+- Top pages/screens and path reports prompt for date range (`today`, `yesterday`, `last7`, `last30`, `custom`)
+- Custom range input accepts two dates separated by space or comma
 
 ## Development tasks
 
@@ -47,6 +57,7 @@ Instructions for agents working with the GA4 CLI tool.
 1. Add case to `runCliCommand()` in `index.js`
 2. Update `printUsage()` with the new command and options
 3. Add corresponding `GA4Service` method if API access is needed
+4. If TUI feature is added, wire it into `GA4TUI.showMenu()` and add navigation keys (`Esc`/`B` back, `R` refresh)
 
 ### Adding new metrics or dimensions
 

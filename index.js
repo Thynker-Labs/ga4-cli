@@ -152,6 +152,46 @@ class GA4Service {
     };
   }
 
+  async getTopPagesReport(startDate, endDate, limit = 20) {
+    this.requirePropertyId();
+    const res = await this.client.properties.runReport({
+      property: `properties/${this.propertyId}`,
+      requestBody: {
+        dateRanges: [{ startDate, endDate }],
+        dimensions: [{ name: 'pagePath' }, { name: 'pageTitle' }],
+        metrics: [
+          { name: 'screenPageViews' },
+          { name: 'sessions' },
+          { name: 'bounceRate' },
+          { name: 'averageSessionDuration' },
+        ],
+        orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
+        limit: String(limit),
+      },
+    });
+
+    const formatRate = (v) => {
+      const n = parseFloat(v);
+      if (isNaN(n)) return v;
+      return n > 0 && n < 1 ? String(Math.round(n * 1000) / 10) : String(Math.round(n * 10) / 10);
+    };
+
+    const formatDuration = (v) => {
+      const n = parseFloat(v);
+      return isNaN(n) ? v : String(Math.round(n * 10) / 10);
+    };
+
+    const rows = res.data?.rows || [];
+    return rows.map((r) => ({
+      path: r.dimensionValues?.[0]?.value || '(not set)',
+      pageTitle: r.dimensionValues?.[1]?.value || '(not set)',
+      views: r.metricValues?.[0]?.value || '0',
+      sessions: r.metricValues?.[1]?.value || '0',
+      bounceRate: formatRate(r.metricValues?.[2]?.value || '0'),
+      engagementTime: formatDuration(r.metricValues?.[3]?.value || '0'),
+    }));
+  }
+
   getPathVariants(path) {
     const p = String(path || '').trim();
     if (!p) return [];
@@ -296,6 +336,7 @@ class GA4TUI {
     this.service = service;
     this.screen = blessed.screen({ smartCSR: true, title: 'GA4 CLI' });
     this.realtimeInterval = null;
+    this.activeViewId = 0;
 
     this.mainBox = blessed.box({
       parent: this.screen,
@@ -314,18 +355,34 @@ class GA4TUI {
       height: '100%',
     });
 
-    this.screen.key(['escape', 'q', 'C-c'], () => {
-      if (this.realtimeInterval) clearInterval(this.realtimeInterval);
+    this.screen.key(['q', 'C-c'], () => {
+      this.stopRealtime();
       process.exit(0);
     });
   }
 
+  stopRealtime() {
+    if (this.realtimeInterval) {
+      clearInterval(this.realtimeInterval);
+      this.realtimeInterval = null;
+    }
+  }
+
+  clearContent() {
+    this.stopRealtime();
+    while (this.contentBox.children.length) {
+      this.contentBox.children[0].destroy();
+    }
+    this.activeViewId += 1;
+  }
+
   async showMenu() {
     const blessed = this.blessed;
-    this.contentBox.children = [];
+    this.clearContent();
 
     const options = [
       { label: 'Realtime summary', action: () => this.showRealtime() },
+      { label: 'Top pages/screens', action: () => this.showTopPagesDateRange() },
       { label: 'Path report', action: () => this.showPathInput() },
       { label: 'Quit', action: () => process.exit(0) },
     ];
@@ -334,11 +391,21 @@ class GA4TUI {
       parent: this.contentBox,
       top: 'center',
       left: 'center',
-      width: '50%',
-      height: 8,
+      width: '60%',
+      height: 10,
       border: { type: 'line' },
       style: { selected: { bg: 'blue' } },
       items: options.map((o) => o.label),
+      keys: true,
+      vi: true,
+    });
+
+    blessed.text({
+      parent: this.contentBox,
+      bottom: 0,
+      left: 'center',
+      content: 'Use arrows + Enter. Press q to quit.',
+      style: { fg: 'gray' },
     });
 
     list.focus();
@@ -346,59 +413,217 @@ class GA4TUI {
     this.screen.render();
   }
 
-  async showPathInput() {
+  showDateRangeSelector(title, onSelect, onBack) {
     const blessed = this.blessed;
-    this.contentBox.children = [];
+    this.clearContent();
+    const options = [
+      { label: 'Today', value: 'today' },
+      { label: 'Yesterday', value: 'yesterday' },
+      { label: 'Last 7 days', value: 'last7' },
+      { label: 'Last 30 days', value: 'last30' },
+      { label: 'Custom (enter start/end date)', value: 'custom' },
+      { label: 'Back', value: 'back' },
+    ];
+
+    const list = blessed.list({
+      parent: this.contentBox,
+      top: 'center',
+      left: 'center',
+      width: '70%',
+      height: 12,
+      border: { type: 'line' },
+      label: ` ${title} `,
+      keys: true,
+      vi: true,
+      style: { selected: { bg: 'blue' } },
+      items: options.map((o) => o.label),
+    });
+
+    list.focus();
+    list.key(['escape', 'b'], () => onBack());
+    list.key('enter', () => {
+      const selected = options[list.selected];
+      if (!selected || selected.value === 'back') {
+        onBack();
+        return;
+      }
+
+      if (selected.value === 'custom') {
+        this.showCustomDateRangeInput(onSelect, () => this.showDateRangeSelector(title, onSelect, onBack));
+        return;
+      }
+
+      const range = getDateRange(selected.value);
+      onSelect({
+        ...range,
+        rangeLabel: selected.label,
+      });
+    });
+
+    blessed.text({
+      parent: this.contentBox,
+      bottom: 0,
+      left: 'center',
+      content: 'Choose range and press Enter. Esc/B to go back.',
+      style: { fg: 'gray' },
+    });
+
+    this.screen.render();
+  }
+
+  showCustomDateRangeInput(onSelect, onBack) {
+    const blessed = this.blessed;
+    this.clearContent();
 
     const form = blessed.form({
       parent: this.contentBox,
       top: 'center',
       left: 'center',
-      width: 50,
+      width: '70%',
+      height: 13,
+      border: { type: 'line' },
+      label: ' Custom Date Range ',
       keys: true,
     });
 
     blessed.text({
       parent: form,
-      top: 0,
-      left: 0,
+      top: 1,
+      left: 2,
+      content: 'Enter both dates: YYYY-MM-DD YYYY-MM-DD',
+    });
+    blessed.text({
+      parent: form,
+      top: 2,
+      left: 2,
+      content: 'Example: 2026-02-01 2026-02-25',
+      style: { fg: 'gray' },
+    });
+
+    const input = blessed.textbox({
+      parent: form,
+      top: 4,
+      left: 2,
+      width: '95%-4',
+      height: 3,
+      border: { type: 'line' },
+      inputOnFocus: true,
+      name: 'dates',
+    });
+
+    const errorText = blessed.text({
+      parent: form,
+      top: 8,
+      left: 2,
+      content: '',
+      style: { fg: 'red' },
+    });
+
+    blessed.text({
+      parent: form,
+      top: 10,
+      left: 2,
+      content: 'Enter to continue  |  Esc/B to go back',
+      style: { fg: 'gray' },
+    });
+
+    form.on('submit', (data) => {
+      const raw = String(data.dates || '').trim();
+      const parts = raw.split(/[,\s]+/).filter(Boolean);
+      const startDate = parts[0];
+      const endDate = parts[1];
+      if (!startDate || !endDate || !isIsoDate(startDate) || !isIsoDate(endDate)) {
+        errorText.setContent('Invalid input. Use: YYYY-MM-DD YYYY-MM-DD');
+        this.screen.render();
+        return;
+      }
+      onSelect({
+        startDate,
+        endDate,
+        rangeLabel: `Custom (${startDate} to ${endDate})`,
+      });
+    });
+
+    input.key('enter', () => form.submit());
+    input.key(['escape', 'b'], () => onBack());
+    input.focus();
+    this.screen.render();
+  }
+
+  async showPathInput() {
+    const blessed = this.blessed;
+    this.clearContent();
+
+    const form = blessed.form({
+      parent: this.contentBox,
+      top: 'center',
+      left: 'center',
+      width: '70%',
+      height: 12,
+      border: { type: 'line' },
+      label: ' Path Report ',
+      keys: true,
+    });
+
+    blessed.text({
+      parent: form,
+      top: 1,
+      left: 2,
       content: 'Enter path (e.g. /about or /blog/post):',
     });
 
     const input = blessed.textbox({
       parent: form,
-      top: 2,
-      left: 0,
-      width: 48,
+      top: 3,
+      left: 2,
+      width: '95%-4',
       height: 3,
       border: { type: 'line' },
       inputOnFocus: true,
       name: 'path',
     });
 
+    const errorText = blessed.text({
+      parent: form,
+      top: 7,
+      left: 2,
+      content: '',
+      style: { fg: 'red' },
+    });
+
     blessed.text({
       parent: form,
-      top: 6,
-      left: 0,
-      content: 'Press Enter to fetch  |  Esc to go back',
+      top: 9,
+      left: 2,
+      content: 'Press Enter to continue  |  Esc/B to go back',
       style: { fg: 'gray' },
     });
 
     input.focus();
-    input.key('escape', () => this.showMenu());
+    input.key(['escape', 'b'], () => this.showMenu());
 
-    form.on('submit', async (data) => {
-      const path = (data.path || '').trim();
-      if (path) await this.showPathReport(path);
+    form.on('submit', (data) => {
+      const pathInput = String(data.path || '').trim();
+      if (!pathInput) {
+        errorText.setContent('Path is required.');
+        this.screen.render();
+        return;
+      }
+      this.showDateRangeSelector(
+        'Choose Date Range For Path Report',
+        ({ startDate, endDate, rangeLabel }) => this.showPathReport(pathInput, startDate, endDate, rangeLabel),
+        () => this.showPathInput(),
+      );
     });
 
     input.key('enter', () => form.submit());
     this.screen.render();
   }
 
-  async showPathReport(pathInput) {
+  async showPathReport(pathInput, startDate, endDate, rangeLabel) {
     const blessed = this.blessed;
-    this.contentBox.children = [];
+    this.clearContent();
+    const viewId = this.activeViewId;
 
     const box = blessed.box({
       parent: this.contentBox,
@@ -414,19 +639,24 @@ class GA4TUI {
       keys: true,
     });
 
-    const goBack = () => {
-      this.showPathInput();
-    };
+    const goBack = () =>
+      this.showDateRangeSelector(
+        'Choose Date Range For Path Report',
+        ({ startDate: nextStart, endDate: nextEnd, rangeLabel: nextLabel }) =>
+          this.showPathReport(pathInput, nextStart, nextEnd, nextLabel),
+        () => this.showPathInput(),
+      );
     box.key(['escape', 'b'], goBack);
+    box.key(['r'], () => this.showPathReport(pathInput, startDate, endDate, rangeLabel));
 
     try {
-      const { startDate, endDate } = getDateRange('last7');
       const report = await this.service.getPathReport(pathInput, startDate, endDate);
+      if (viewId !== this.activeViewId) return;
 
       const lines = [
         `{cyan-fg}Path Report{/}  |  {green-fg}${report.path}{/}`,
         `Includes variants: {yellow-fg}${report.pathVariants.join(', ')}{/}`,
-        `Range: ${startDate} to ${endDate}  |  Property: ${this.service.propertyId}`,
+        `Range: ${startDate} to ${endDate} (${rangeLabel})  |  Property: ${this.service.propertyId}`,
         '',
         '{cyan-fg}Metrics{/}',
         `  Sessions:         {green-fg}${report.sessions}{/}`,
@@ -446,12 +676,84 @@ class GA4TUI {
         });
       }
 
-      lines.push('', '{gray-fg}Press Esc or B to go back{/}');
+      lines.push('', '{gray-fg}Press Esc/B to change range, R to refresh{/}');
       box.setContent(lines.join('\n'));
       box.setScrollPerc(0);
     } catch (error) {
+      if (viewId !== this.activeViewId) return;
       logError(error, 'tui:showPathReport');
-      box.setContent(`{red-fg}Error:{/} ${error.message}\n\n{gray-fg}Press Esc to go back{/}`);
+      box.setContent(`{red-fg}Error:{/} ${error.message}\n\n{gray-fg}Press Esc/B to go back{/}`);
+    }
+
+    this.screen.render();
+  }
+
+  showTopPagesDateRange() {
+    this.showDateRangeSelector(
+      'Choose Date Range For Top Pages/Screens',
+      ({ startDate, endDate, rangeLabel }) => this.showTopPagesReport(startDate, endDate, rangeLabel),
+      () => this.showMenu(),
+    );
+  }
+
+  async showTopPagesReport(startDate, endDate, rangeLabel, limit = 20) {
+    const blessed = this.blessed;
+    this.clearContent();
+    const viewId = this.activeViewId;
+
+    const box = blessed.box({
+      parent: this.contentBox,
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: '100%',
+      border: { type: 'line' },
+      style: { border: { fg: 'green' } },
+      tags: true,
+      scrollable: true,
+      alwaysScroll: true,
+      keys: true,
+      vi: true,
+      content: '{green-fg}Loading top pages/screens...{/}',
+    });
+
+    box.key(['escape', 'b'], () => this.showTopPagesDateRange());
+    box.key(['r'], () => this.showTopPagesReport(startDate, endDate, rangeLabel, limit));
+
+    try {
+      const pages = await this.service.getTopPagesReport(startDate, endDate, limit);
+      if (viewId !== this.activeViewId) return;
+      const pathWidth = 34;
+      const titleWidth = 30;
+      const truncate = (value, width) => {
+        const text = String(value || '');
+        return text.length > width ? `${text.slice(0, width - 3)}...` : text;
+      };
+      const lines = [
+        `{green-fg}Top Pages/Screens{/}  |  Property: {cyan-fg}${this.service.propertyId}{/}`,
+        `Range: ${startDate} to ${endDate} (${rangeLabel})  |  Rows: ${pages.length}`,
+        '',
+        `${'#'.padEnd(3)} ${'Path'.padEnd(pathWidth)} ${'Title'.padEnd(titleWidth)} ${'Views'.padStart(8)} ${'Sessions'.padStart(10)} ${'Bounce'.padStart(8)} ${'Engage'.padStart(8)}`,
+        '-'.repeat(3 + pathWidth + titleWidth + 42),
+      ];
+
+      if (pages.length === 0) {
+        lines.push('{yellow-fg}No rows returned for this date range.{/}');
+      } else {
+        pages.forEach((row, idx) => {
+          lines.push(
+            `${String(idx + 1).padEnd(3)} ${truncate(row.path, pathWidth).padEnd(pathWidth)} ${truncate(row.pageTitle, titleWidth).padEnd(titleWidth)} ${row.views.padStart(8)} ${row.sessions.padStart(10)} ${`${row.bounceRate}%`.padStart(8)} ${row.engagementTime.padStart(8)}`,
+          );
+        });
+      }
+
+      lines.push('', '{gray-fg}Press Esc/B to change range, R to refresh{/}');
+      box.setContent(lines.join('\n'));
+      box.setScrollPerc(0);
+    } catch (error) {
+      if (viewId !== this.activeViewId) return;
+      logError(error, 'tui:showTopPagesReport');
+      box.setContent(`{red-fg}Error:{/} ${error.message}\n\n{gray-fg}Press Esc/B to go back{/}`);
     }
 
     this.screen.render();
@@ -459,7 +761,8 @@ class GA4TUI {
 
   async showRealtime() {
     const blessed = this.blessed;
-    this.contentBox.children = [];
+    this.clearContent();
+    const viewId = this.activeViewId;
 
     const summaryBox = blessed.box({
       parent: this.contentBox,
@@ -487,15 +790,17 @@ class GA4TUI {
       keys: true,
       content: 'Loading top pages...',
     });
+    pagesBox.key(['escape', 'b'], () => this.showMenu());
+    pagesBox.key(['r'], () => refresh());
+    pagesBox.focus();
 
     let countdown = 5;
     let lastSummary = null;
-    let lastTopPages = null;
 
     const formatSummaryLine = (s, secs) => {
       if (!s) return '';
       const cd = secs !== undefined ? `  |  {yellow-fg}Refreshing in {bold}${secs}{/bold}s{/}` : '';
-      return `{cyan-fg}Realtime{/} (property {green-fg}${this.service.propertyId}{/})  |  {cyan-fg}Active Users:{/} {green-fg}${s.activeUsers}{/}  |  {cyan-fg}Views:{/} {green-fg}${s.screenPageViews}{/}  |  {cyan-fg}Events:{/} {green-fg}${s.eventCount}{/}${cd}`;
+      return `{cyan-fg}Realtime{/} (property {green-fg}${this.service.propertyId}{/})  |  {cyan-fg}Active Users:{/} {green-fg}${s.activeUsers}{/}  |  {cyan-fg}Views:{/} {green-fg}${s.screenPageViews}{/}  |  {cyan-fg}Events:{/} {green-fg}${s.eventCount}{/}${cd}\n{gray-fg}Esc/B: menu  |  R: refresh now  |  q: quit{/}`;
     };
 
     const refresh = async () => {
@@ -504,8 +809,8 @@ class GA4TUI {
           this.service.getRealtimeSummary(),
           this.service.getRealtimeTopPages(20),
         ]);
+        if (viewId !== this.activeViewId) return;
         lastSummary = summary;
-        lastTopPages = topPages;
         countdown = 5;
 
         summaryBox.setContent(formatSummaryLine(summary));
@@ -518,6 +823,7 @@ class GA4TUI {
         pagesBox.setContent(header + '\n' + rows.join('\n'));
         pagesBox.setScrollPerc(0);
       } catch (error) {
+        if (viewId !== this.activeViewId) return;
         logError(error, 'tui:showRealtime');
         summaryBox.setContent(`{red-fg}Error:{/} ${error.message}`);
         pagesBox.setContent(`Logged to ${ERROR_LOG_FILE}`);
@@ -526,6 +832,7 @@ class GA4TUI {
     };
 
     const tick = () => {
+      if (viewId !== this.activeViewId) return;
       if (countdown > 0) {
         if (lastSummary) {
           summaryBox.setContent(formatSummaryLine(lastSummary, countdown));
@@ -582,6 +889,29 @@ function getDateRange(range) {
   return { startDate: formatDate(start), endDate: formatDate(end) };
 }
 
+function isIsoDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim());
+}
+
+function resolveDateRange(options = {}) {
+  const range = options.range;
+  const startDate = options['start-date'];
+  const endDate = options['end-date'];
+  const hasCustomRange = Boolean(startDate || endDate);
+
+  if (range === 'custom' || hasCustomRange) {
+    if (!startDate || !endDate) {
+      throw new Error('Custom range requires both --start-date and --end-date');
+    }
+    if (!isIsoDate(startDate) || !isIsoDate(endDate)) {
+      throw new Error('Dates must use YYYY-MM-DD format');
+    }
+    return { startDate, endDate };
+  }
+
+  return getDateRange(range);
+}
+
 function parseArgs(argv) {
   const args = [...argv];
   const options = {};
@@ -606,8 +936,9 @@ function printUsage() {
   ga4 init <service-account-json>
   ga4 tui [--property <id>]
   ga4 realtime --property <id> [--json]
-  ga4 report --property <id> [--range today|yesterday|last7|last30|last90|all] [--json]
-  ga4 path <path> --property <id> [--range today|yesterday|last7|last30|last90|all] [--json]
+  ga4 report --property <id> [--range today|yesterday|last7|last30|last90|all|custom] [--start-date YYYY-MM-DD --end-date YYYY-MM-DD] [--json]
+  ga4 pages --property <id> [--range today|yesterday|last7|last30|last90|all|custom] [--start-date YYYY-MM-DD --end-date YYYY-MM-DD] [--limit 20] [--json]
+  ga4 path <path> --property <id> [--range today|yesterday|last7|last30|last90|all|custom] [--start-date YYYY-MM-DD --end-date YYYY-MM-DD] [--json]
 
   - Errors are logged to ${ERROR_LOG_FILE}`);
 }
@@ -629,7 +960,7 @@ async function runCliCommand(service, command, options, positionals = []) {
       return;
     }
     case 'report': {
-      const { startDate, endDate } = getDateRange(options.range);
+      const { startDate, endDate } = resolveDateRange(options);
       const summary = await service.getReportSummary(startDate, endDate);
       if (options.json) {
         console.log(JSON.stringify({ startDate, endDate, ...summary }, null, 2));
@@ -643,13 +974,52 @@ async function runCliCommand(service, command, options, positionals = []) {
       }
       return;
     }
+    case 'pages': {
+      const { startDate, endDate } = resolveDateRange(options);
+      const limit = options.limit ? parseInt(options.limit, 10) : 20;
+      if (isNaN(limit) || limit <= 0) {
+        throw new Error('--limit must be a positive integer');
+      }
+
+      const pages = await service.getTopPagesReport(startDate, endDate, limit);
+      if (options.json) {
+        console.log(JSON.stringify({ startDate, endDate, limit, rows: pages }, null, 2));
+      } else {
+        console.log(`Property: ${service.propertyId}`);
+        console.log(`Range: ${startDate} to ${endDate}`);
+        console.log(`Top pages/screens (limit ${limit})`);
+        if (pages.length === 0) {
+          console.log('No rows returned.');
+          return;
+        }
+
+        const pathWidth = 36;
+        const titleWidth = 34;
+        const truncate = (value, width) => {
+          const text = String(value || '');
+          if (text.length <= width) return text;
+          return `${text.slice(0, width - 3)}...`;
+        };
+
+        console.log(
+          `${'#'.padEnd(3)} ${'Path'.padEnd(pathWidth)} ${'Title'.padEnd(titleWidth)} ${'Views'.padStart(8)} ${'Sessions'.padStart(10)} ${'Bounce'.padStart(8)} ${'Engage(s)'.padStart(10)}`,
+        );
+        console.log('-'.repeat(3 + pathWidth + titleWidth + 42));
+        pages.forEach((row, idx) => {
+          console.log(
+            `${String(idx + 1).padEnd(3)} ${truncate(row.path, pathWidth).padEnd(pathWidth)} ${truncate(row.pageTitle, titleWidth).padEnd(titleWidth)} ${row.views.padStart(8)} ${row.sessions.padStart(10)} ${`${row.bounceRate}%`.padStart(8)} ${row.engagementTime.padStart(10)}`,
+          );
+        });
+      }
+      return;
+    }
     case 'path': {
       const pathArg = options.path ?? positionals[1];
       if (!pathArg) {
         console.error('Usage: ga4 path <path> --property <id> [--range last7]');
         process.exit(1);
       }
-      const { startDate, endDate } = getDateRange(options.range);
+      const { startDate, endDate } = resolveDateRange(options);
       const pathReport = await service.getPathReport(pathArg, startDate, endDate);
       if (options.json) {
         console.log(JSON.stringify({ startDate, endDate, ...pathReport }, null, 2));
